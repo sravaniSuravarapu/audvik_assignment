@@ -71,7 +71,7 @@ python manage.py migrate
 python manage.py runserver
 
 Now, your Django application should be running at http://127.0.0.1:8000/!
-Deactivating the Virtual Environment
+
 
 
 
