@@ -19,190 +19,127 @@ def home(request):
     return HttpResponse("Hello")
 
 def is_valid_phone_number(phone_number):
-    if isinstance(phone_number, str):
-        pattern = r'^\d{3}-\d{3}-\d{4}$'
-        return re.match(pattern, phone_number)
-    return False  
+    pattern = r'^\d{3}-\d{3}-\d{4}$'
+    return bool(re.match(pattern, phone_number)) if isinstance(phone_number, str) else False
 
 def is_valid_email(email):
-    if isinstance(email, str):
-        pattern = r'^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$'
-        return re.match(pattern, email)
-    return False 
+    pattern = r'^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$'
+    return bool(re.match(pattern, email)) if isinstance(email, str) else False
+
+def create_customer(data):
+    """Validate and create a single customer object"""
+    name = data.get('name')
+    email = data.get('email')
+    phone_number = data.get('phone_number')
+    address = data.get('address')
+    date_of_birth = data.get('date_of_birth')
+    errors = []
+    
+    if not name or pd.isna(name):
+        errors.append("Name is required")
+    if not email:
+        errors.append("Email is required")
+    if email and not is_valid_email(email):
+        errors.append("Invalid email format")
+    if phone_number and not is_valid_phone_number(phone_number):
+        errors.append("Invalid phone number format (e.g., 123-456-7890)")
+
+    if email and Customer.objects.filter(email=email).exists():
+        errors.append("Customer with this email already exists")
+
+    if errors:
+        return None, errors
+
+    # creates customer only if passes the validation
+    customer = Customer(
+        name=name,
+        email=email,
+        phone_number=phone_number,
+        address=address,
+        date_of_birth=date_of_birth,
+    )
+    return customer, None
 
 class ImportAPIView(APIView):
     serializer_class = ImportSerializer
     parser_classes = [MultiPartParser, FormParser]
 
     def post(self, request):
+        data = request.FILES
+        serializer = self.serializer_class(data=data)
+
+        if not serializer.is_valid():
+            return Response({'status': False, 'message': 'Provide a valid file'}, status=status.HTTP_400_BAD_REQUEST)
+
+        #read excel
+        excel_file = data.get('file')
         try:
-            data = request.FILES
-            serializer = self.serializer_class(data=data)
-            
-            #validate the file
-            if not serializer.is_valid():
-                return Response({
-                    'status': False,
-                    'message': 'Provide a valid file'
-                }, status=status.HTTP_400_BAD_REQUEST)
-             
-            #readi the excel file 
-            excel_file = data.get('file')
-            try:
-                #reads the first sheet of excel
-                df = pd.read_excel(excel_file, sheet_name=0)
-            except Exception as e:
-                return Response({
-                    'status': False,
-                    'message': f'Invalid file format: {str(e)}'
-                }, status=status.HTTP_400_BAD_REQUEST)
-
-            required_columns = ['Name', 'Email', 'Phone Number', 'Address', 'Date of Birth']
-            
-            #check the all required files are present or not
-            if not all(column in df.columns for column in required_columns):
-                return Response({
-                    'status': False,
-                    'message': 'Missing required columns in the Excel file'
-                }, status=status.HTTP_400_BAD_REQUEST)
-           
-            #initialize the lists to store customer objects and errors
-            customers = []
-            errors = []
-            row_number = 1
-            email_set = set() 
-
-            for index, row in df.iterrows():
-                name = row.get('Name')
-                email = row.get('Email')
-                phone_number = row.get('Phone Number')
-                address = row.get('Address')
-                date_of_birth = row.get('Date of Birth')
-
-                row_errors = []
-               
-               #validating fields
-                if not name or pd.isna(name):
-                    row_errors.append("Name is required")
-                if not email or pd.isna(email): 
-                    row_errors.append("Email is required")
-
-                if phone_number and not is_valid_phone_number(str(phone_number)):
-                    row_errors.append("Invalid phone number format (e.g., 123-456-7890)")
-
-                if email:
-                    if not is_valid_email(str(email)):
-                        row_errors.append("Invalid email format")
-                    if email in email_set:
-                        row_errors.append("Duplicate email in file")
-                    else:
-                        email_set.add(email)
-
-                if email and Customer.objects.filter(email=email).exists():
-                    row_errors.append("Customer with this email already exists")
-
-                if row_errors:
-                    errors.append({"row": row_number, "errors": row_errors})
-                else:
-
-                    #creating the customer object
-                    customer = Customer(
-                        name=name,
-                        email=email,
-                        phone_number=phone_number,
-                        address=address,
-                        date_of_birth=date_of_birth,
-                    )
-                    customers.append(customer)#adding to the list for bulk creation
-
-                row_number += 1
-   
-
-           #create the customers
-            if customers:
-                try:
-                    Customer.objects.bulk_create(customers)
-                except IntegrityError as e:
-                    errors.append({"error": str(e)})
-            if errors:
-                return Response({
-                    'status': False,
-                    'message': 'Some customers were not imported due to errors',
-                    'errors': errors
-                }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
-
-            return Response({
-                'status': True,
-                'message': 'Customers imported successfully!'
-            }, status=status.HTTP_201_CREATED)
-
+            df = pd.read_excel(excel_file, sheet_name=0)
         except Exception as e:
-            return Response({
-                'status': False,
-                'message': f'We could not complete the request: {str(e)}'
-            }, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'status': False, 'message': f'Invalid file format: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
 
+        required_columns = ['Name', 'Email', 'Phone Number', 'Address', 'Date of Birth']
 
-#display all records
+        #checking all required columns are there or not
+        if not all(column in df.columns for column in required_columns):
+            return Response({'status': False, 'message': 'Missing required columns in the Excel file'}, status=status.HTTP_400_BAD_REQUEST)
+
+       #to store the customer objects
+        customers = []
+        errors = []
+        email_set = set()
+
+        for index, row in df.iterrows():
+            data = {
+                'name': row.get('Name'),
+                'email': row.get('Email'),
+                'phone_number': row.get('Phone Number'),
+                'address': row.get('Address'),
+                'date_of_birth': row.get('Date of Birth'),
+            }
+
+            customer, row_errors = create_customer(data)
+            if row_errors:
+                errors.append({"row": index + 1, "errors": row_errors})
+            else:
+                if data['email'] in email_set:
+                    errors.append({"row": index + 1, "errors": ["Duplicate email in file"]})
+                else:
+                    email_set.add(data['email'])
+                    customers.append(customer)
+       
+       #bulk import
+        if customers:
+            try:
+                Customer.objects.bulk_create(customers)
+            except IntegrityError as e:
+                errors.append({"error": str(e)})
+
+        if errors:
+            return Response({'status': False, 'message': 'Some customers were not imported due to errors', 'errors': errors}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+
+        return Response({'status': True, 'message': 'Customers imported successfully!'}, status=status.HTTP_201_CREATED)
+
+#create
+class CreateAPIView(APIView):
+    serializer_class = CreateCustomerSerializer
+
+    def post(self, request):
+        customer, errors = create_customer(request.data)
+        if errors:
+            return Response({'status': False, 'message': 'Invalid data provided', 'errors': errors}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            customer.save()
+            return Response({'status': True, 'message': 'Customer created successfully!'}, status=status.HTTP_201_CREATED)
+        except IntegrityError as e:
+            return Response({'status': False, 'message': f'Integrity error: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+
 class ListCustomersView(APIView):
     def get(self, request):
         customers = Customer.objects.all()
         serializer = CreateCustomerSerializer(customers, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
-
-#create sutomer
-class CreateAPIView(APIView):
-    serializer_class = CreateCustomerSerializer
-
-    def post(self, request):
-        try:
-            data = request.data
-            serializer = self.serializer_class(data=data)
-
-            if not serializer.is_valid():
-                return Response({
-                    'status': False,
-                    'message': 'Invalid data provided',
-                    'errors': serializer.errors
-                }, status=status.HTTP_400_BAD_REQUEST)
-
-            name = data.get('name')
-            email = data.get('email')
-            phone_number = data.get('phone_number')
-            address = data.get('address')
-            date_of_birth = data.get('date_of_birth')
-
-            if Customer.objects.filter(email=email).exists():
-                return Response({
-                    'status': False,
-                    'message': 'Customer with this email already exists'
-                }, status=status.HTTP_400_BAD_REQUEST)
-
-            customer = Customer(
-                name=name,
-                email=email,
-                phone_number=phone_number,
-                address=address,
-                date_of_birth=date_of_birth
-            )
-            customer.save()
-
-            return Response({
-                'status': True,
-                'message': 'Customer created successfully!'
-            }, status=status.HTTP_201_CREATED)
-
-        except IntegrityError as e:
-            return Response({
-                'status': False,
-                'message': f'Integrity error: {str(e)}'
-            }, status=status.HTTP_400_BAD_REQUEST)
-
-        except Exception as e:
-            return Response({
-                'status': False,
-                'message': f'We could not complete the request: {str(e)}'
-            }, status=status.HTTP_400_BAD_REQUEST)
 
 #update
 class UpdateAPIView(APIView):
